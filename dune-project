@@ -19,7 +19,7 @@
  (bug_reports "https://github.com/RCmerci/melange-transit/issues")
  (source (github RCmerci/melange-transit))
  (depends
-  (ocaml  (>= 5.2))))
+  (ocaml  (>= 5.1.1))))
 
 (package
  (name melange-transit-melange)
@@ -32,7 +32,7 @@
  (bug_reports "https://github.com/RCmerci/melange-transit/issues")
  (source (github RCmerci/melange-transit))
  (depends
-  (ocaml  (>= 5.2))
+  (ocaml  (>= 5.1.1))
   melange
   (melange-transit-core (= :version))
   (melange-edn-melange (= 0.5.0))
@@ -49,7 +49,7 @@
  (bug_reports "https://github.com/RCmerci/melange-transit/issues")
  (source (github RCmerci/melange-transit))
  (depends
-  (ocaml  (>= 5.2))
+  (ocaml  (>= 5.1.1))
   js_of_ocaml
   (melange-transit-core (= :version))
   (melange-edn-core (= 0.5.0))
@@ -67,7 +67,7 @@
  (bug_reports "https://github.com/RCmerci/melange-transit/issues")
  (source (github RCmerci/melange-transit))
  (depends
-  (ocaml  (>= 5.2))
+  (ocaml  (>= 5.1.1))
   (melange-transit-core (= :version))
   (melange-edn-core (= 0.5.0))
   (melange-edn-native (= 0.5.0))

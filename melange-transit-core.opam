@@ -11,7 +11,7 @@ homepage: "https://github.com/RCmerci/melange-transit"
 bug-reports: "https://github.com/RCmerci/melange-transit/issues"
 depends: [
   "dune" {>= "3.16"}
-  "ocaml" {>= "5.2"}
+  "ocaml" {>= "5.1.1"}
   "odoc" {with-doc}
 ]
 build: [
