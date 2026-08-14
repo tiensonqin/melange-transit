@@ -192,27 +192,31 @@ module Json = struct
         else acc @ [ (key, value) ])
       [] entries
 
-  let key_string context = function
+  let raw_key_string mode = function
     | Null -> Some "~_"
     | Bool true -> Some "~?t"
     | Bool false -> Some "~?f"
-    | String text -> Some (write_cache_any context (escaped_string text))
+    | String text -> Some (escaped_string text)
     | Int value -> Some ("~i" ^ string_of_int value)
     | Int64 value -> Some ("~i" ^ Int64.to_string value)
     | Float value -> Some ("~i" ^ Yojson.Safe.to_string (`Float value))
     | Binary text -> Some ("~b" ^ base64_encode text)
-    | Keyword text -> Some (write_cache_token context ("~:" ^ text))
-    | Symbol text -> Some (write_cache_token context ("~$" ^ text))
+    | Keyword text -> Some ("~:" ^ text)
+    | Symbol text -> Some ("~$" ^ text)
     | Big_decimal text -> Some ("~f" ^ text)
     | Big_int text -> Some ("~n" ^ text)
     | Date milliseconds ->
         Some
-          (match context.mode with
+          (match mode with
           | Normal -> "~m" ^ Int64.to_string milliseconds
           | Verbose -> "~t" ^ iso_of_milliseconds milliseconds)
     | Uuid text -> Some ("~u" ^ text)
     | Uri text -> Some ("~r" ^ text)
     | Array _ | Map _ | Set _ | List _ | Tagged _ -> None
+
+  let key_string context value =
+    raw_key_string context.mode value
+    |> Option.map (write_cache_any context)
 
   let stringable_key = function
     | Array _ | Map _ | Set _ | List _ | Tagged _ -> false
@@ -318,46 +322,51 @@ module Json = struct
     | Some (Cached_tag tag) -> String tag
     | None -> decode_error ("unknown Transit cache code: " ^ text)
 
-  let decode_cache_tag_ref context text =
+  let cached_array_tag context text =
     let index_text = String.sub text 1 (String.length text - 1) in
     let index = base44_decode index_text in
     match Hashtbl.find_opt context.cache index with
-    | Some (Cached_tag tag) -> tag
-    | Some (Cached_value (String text)) -> text
-    | Some (Cached_value _) -> decode_error ("Transit cache code is not a tag: " ^ text)
+    | Some (Cached_tag tag) -> Some tag
+    | Some (Cached_value _) -> None
     | None -> decode_error ("unknown Transit cache code: " ^ text)
 
-  let decode_tagged_string context text =
+  let decode_tagged_string ?(as_map_key = false) context text =
     let len = String.length text in
     if len = 0 then String text
     else if Char.equal text.[0] '^' && len > 1 then decode_cache_ref context text
-    else if not (Char.equal text.[0] '~') then String text
-    else if len = 1 then decode_error "invalid Transit escape"
     else
-      let rep = String.sub text 2 (len - 2) in
-      match text.[1] with
-      | '~' | '^' | '`' -> String (String.sub text 1 (len - 1))
-      | '_' -> Null
-      | '?' -> (
-          match rep with
-          | "t" -> Bool true
-          | "f" -> Bool false
-          | _ -> decode_error ("invalid Transit boolean: " ^ text))
-      | ':' -> read_cache_value context text (Keyword rep)
-      | '$' -> read_cache_value context text (Symbol rep)
-      | 'i' -> transit_int rep
-      | 'n' -> Big_int rep
-      | 'f' -> Big_decimal rep
-      | 'b' -> Binary (base64_decode rep)
-      | 'm' -> (
-          match Int64.of_string_opt rep with
-          | Some milliseconds -> Date milliseconds
-          | None -> decode_error ("invalid Transit date: " ^ text))
-      | 't' -> Date (milliseconds_of_iso rep)
-      | 'u' -> Uuid rep
-      | 'r' -> Uri rep
-      | 'c' -> String rep
-      | _ -> decode_error ("unsupported Transit tag: " ^ text)
+      let value =
+        if not (Char.equal text.[0] '~') then String text
+        else if len = 1 then decode_error "invalid Transit escape"
+        else
+          let rep = String.sub text 2 (len - 2) in
+          match text.[1] with
+          | '~' | '^' | '`' -> String (String.sub text 1 (len - 1))
+          | '_' -> Null
+          | '?' -> (
+              match rep with
+              | "t" -> Bool true
+              | "f" -> Bool false
+              | _ -> decode_error ("invalid Transit boolean: " ^ text))
+          | ':' -> Keyword rep
+          | '$' -> Symbol rep
+          | 'i' -> transit_int rep
+          | 'n' -> Big_int rep
+          | 'f' -> Big_decimal rep
+          | 'b' -> Binary (base64_decode rep)
+          | 'm' -> (
+              match Int64.of_string_opt rep with
+              | Some milliseconds -> Date milliseconds
+              | None -> decode_error ("invalid Transit date: " ^ text))
+          | 't' -> Date (milliseconds_of_iso rep)
+          | 'u' -> Uuid rep
+          | 'r' -> Uri rep
+          | 'c' -> String rep
+          | _ -> decode_error ("unsupported Transit tag: " ^ text)
+      in
+      if as_map_key || cacheable_token text then
+        read_cache_value context text value
+      else value
 
   let rec value_of_yojson context = function
     | `Null -> Null
@@ -386,8 +395,15 @@ module Json = struct
   and value_of_array context = function
     | [ `String "~#'"; value ] -> value_of_yojson context value
     | `String "^ " :: values -> map_of_string_key_flat_array context values
-    | [ `String raw_tag; value ] ->
-        tagged_array_value context (array_tag context raw_tag) value
+    | [ `String raw_tag; value ] -> (
+        match array_tag context raw_tag with
+        | Some tag -> tagged_array_value context tag value
+        | None ->
+            Array
+              [
+                value_of_yojson context (`String raw_tag);
+                value_of_yojson context value;
+              ])
     | values -> Array (List.map (value_of_yojson context) values)
 
   and tagged_array_value context tag value =
@@ -430,19 +446,16 @@ module Json = struct
 
   and array_tag context tag =
     if String.length tag > 1 && Char.equal tag.[0] '^' then
-      decode_cache_tag_ref context tag
+      cached_array_tag context tag
     else if
       String.length tag > 2
       && Char.equal tag.[0] '~'
       && Char.equal tag.[1] '#'
-    then read_cache_tag context tag
-    else tag
+    then Some (read_cache_tag context tag)
+    else None
 
   and decode_map_key context key =
-    if String.length key > 1 && Char.equal key.[0] '^' then decode_cache_ref context key
-    else
-      let value = decode_tagged_string context key in
-      read_cache_value context key value
+    decode_tagged_string ~as_map_key:true context key
 
   and verbose_tagged_value context tag value =
     match tag, value with

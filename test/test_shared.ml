@@ -144,6 +144,39 @@ module Make (Json : Json) = struct
        Array [ Keyword "color"; Keyword "color"; Symbol "thing"; Symbol "thing" ]);
       ("read-map", "[\"^ \",\"name\",\"Grace\"]",
        Map [ (String "name", String "Grace") ]);
+      ("read-keyword-map-key-cache",
+       "[\"^ \",\"~:age\",true,\"~:avatar\",[\"^ \",\"^1\",false]]",
+       Map
+         [
+           (Keyword "age", Bool true);
+           (Keyword "avatar", Map [ (Keyword "avatar", Bool false) ]);
+         ]);
+      ("read-symbol-map-key-cache",
+       "[\"^ \",\"~$age\",true,\"~$avatar\",[\"^ \",\"^1\",false]]",
+       Map
+         [
+           (Symbol "age", Bool true);
+           (Symbol "avatar", Map [ (Symbol "avatar", Bool false) ]);
+         ]);
+      ("read-tagged-map-key-cache",
+       "[\"^ \",\"~i12345\",true,\"long-key\",[\"^ \",\"^0\",false]]",
+       Map
+         [
+           (Int 12345, Bool true);
+           (String "long-key", Map [ (Int 12345, Bool false) ]);
+         ]);
+      ("read-cache-reference-as-array-value",
+       "[\"^ \",\"~:block/uuid\",\"value\",\"~:lookup\",[\"^0\",\"~u531a379e-31bb-4ce1-8690-158dceb64be6\"]]",
+       Map
+         [
+           (Keyword "block/uuid", String "value");
+           ( Keyword "lookup",
+             Array
+               [
+                 Keyword "block/uuid";
+                 Uuid "531a379e-31bb-4ce1-8690-158dceb64be6";
+               ] );
+         ]);
       ("read-date", "[\"~t1970-01-02T10:17:36.789Z\"]",
        Array [ Date 123_456_789L ]);
       ("read-int64-tag", "[\"~i9007199254740992\"]",
@@ -168,6 +201,35 @@ module Make (Json : Json) = struct
       ("read-quote-ground", "\"~cx\"", String "x");
     ]
 
+  let fixed_roundtrip_cases =
+    [
+      ("roundtrip-nested-keyword-map-key-cache",
+       Map
+         [
+           (Keyword "age", Map [ (Keyword "db/index", Bool true) ]);
+           ( Keyword "follows",
+             Map [ (Keyword "db/valueType", Keyword "db.type/ref") ] );
+           ( Keyword "avatar",
+             Map
+               [
+                 (Keyword "db/valueType", Keyword "db.type/ref");
+                 (Keyword "db/isComponent", Bool true);
+               ] );
+         ]);
+      ("roundtrip-nested-symbol-map-key-cache",
+       Map
+         [
+           (Symbol "first", Symbol "value");
+           (Symbol "second", Map [ (Symbol "first", Symbol "value") ]);
+         ]);
+      ("roundtrip-tagged-map-key-cache",
+       Map
+         [
+           (Int 12345, Bool true);
+           (String "long-key", Map [ (Int 12345, Bool false) ]);
+         ]);
+    ]
+
   let run_fixed () =
     List.iter
       (fun (name, value, expected) ->
@@ -180,6 +242,9 @@ module Make (Json : Json) = struct
     List.iter
       (fun (name, text, expected) -> check_value name expected (of_string text))
       fixed_read_cases;
+    List.iter
+      (fun (name, value) -> check_value name value (of_string (to_string value)))
+      fixed_roundtrip_cases;
     check_int "read-int-max" 2_147_483_647 (of_string "[\"~#'\",2147483647]");
     check_int "read-int-min" (-2_147_483_648)
       (of_string "[\"~#'\",-2147483648]");
