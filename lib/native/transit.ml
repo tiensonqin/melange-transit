@@ -30,11 +30,17 @@ module Json = struct
     | Cached_value of value
     | Cached_tag of string
 
-  type read_context = { cache : (int, cached) Hashtbl.t }
+  type read_context = {
+    cache : (int, cached) Hashtbl.t;
+    mutable next_cache_index : int;
+  }
 
   let make_cache () = { values = Hashtbl.create 16; next_index = 0 }
   let make_write_context mode = { mode; cache = make_cache () }
-  let make_read_context () = { cache = Hashtbl.create 16 }
+  let make_read_context () =
+    { cache = Hashtbl.create 16; next_cache_index = 0 }
+
+  let max_cache_entries = 44 * 44
 
   let base44_digits =
     "0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ["
@@ -71,26 +77,33 @@ module Json = struct
 
   let write_cache_any context text =
     if context.mode = Verbose || not (cacheable_any text) then text
-    else
+    else (
+      if context.cache.next_index = max_cache_entries then (
+        Hashtbl.clear context.cache.values;
+        context.cache.next_index <- 0);
       match Hashtbl.find_opt context.cache.values text with
       | Some index -> "^" ^ base44_encode index
       | None ->
           let index = context.cache.next_index in
           context.cache.next_index <- index + 1;
           Hashtbl.add context.cache.values text index;
-          text
+          text)
 
   let write_cache_token context text =
     if cacheable_token text then write_cache_any context text else text
 
+  let add_read_cache_entry context entry =
+    if context.next_cache_index = max_cache_entries then
+      context.next_cache_index <- 0;
+    Hashtbl.replace context.cache context.next_cache_index entry;
+    context.next_cache_index <- context.next_cache_index + 1
+
   let read_cache_value context text value =
-    if cacheable_any text then
-      Hashtbl.replace context.cache (Hashtbl.length context.cache) (Cached_value value);
+    if cacheable_any text then add_read_cache_entry context (Cached_value value);
     value
 
   let read_cache_tag context text =
-    if cacheable_any text then
-      Hashtbl.replace context.cache (Hashtbl.length context.cache) (Cached_tag text);
+    if cacheable_any text then add_read_cache_entry context (Cached_tag text);
     text
 
   let escaped_string text =
@@ -322,12 +335,11 @@ module Json = struct
     let index_text = String.sub text 1 (String.length text - 1) in
     let index = base44_decode index_text in
     match Hashtbl.find_opt context.cache index with
-    | Some (Cached_tag tag) -> tag
-    | Some (Cached_value (String text)) -> text
-    | Some (Cached_value _) -> decode_error ("Transit cache code is not a tag: " ^ text)
+    | Some (Cached_tag tag) -> Some tag
+    | Some (Cached_value _) -> None
     | None -> decode_error ("unknown Transit cache code: " ^ text)
 
-  let decode_tagged_string context text =
+  let decode_tagged_string ?(cache_token = true) context text =
     let len = String.length text in
     if len = 0 then String text
     else if Char.equal text.[0] '^' && len > 1 then decode_cache_ref context text
@@ -343,8 +355,12 @@ module Json = struct
           | "t" -> Bool true
           | "f" -> Bool false
           | _ -> decode_error ("invalid Transit boolean: " ^ text))
-      | ':' -> read_cache_value context text (Keyword rep)
-      | '$' -> read_cache_value context text (Symbol rep)
+      | ':' ->
+          if cache_token then read_cache_value context text (Keyword rep)
+          else Keyword rep
+      | '$' ->
+          if cache_token then read_cache_value context text (Symbol rep)
+          else Symbol rep
       | 'i' -> transit_int rep
       | 'n' -> Big_int rep
       | 'f' -> Big_decimal rep
@@ -386,8 +402,15 @@ module Json = struct
   and value_of_array context = function
     | [ `String "~#'"; value ] -> value_of_yojson context value
     | `String "^ " :: values -> map_of_string_key_flat_array context values
-    | [ `String raw_tag; value ] ->
-        tagged_array_value context (array_tag context raw_tag) value
+    | [ `String raw_tag; value ] -> (
+        match array_tag context raw_tag with
+        | Some tag -> tagged_array_value context tag value
+        | None ->
+            Array
+              [
+                value_of_yojson context (`String raw_tag);
+                value_of_yojson context value;
+              ])
     | values -> Array (List.map (value_of_yojson context) values)
 
   and tagged_array_value context tag value =
@@ -395,12 +418,8 @@ module Json = struct
     | "~#set", `List values -> Set (List.map (value_of_yojson context) values)
     | "~#list", `List values -> List (List.map (value_of_yojson context) values)
     | "~#cmap", `List values -> map_of_flat_array context values
-    | _ when
-        String.length tag > 2
-        && Char.equal tag.[0] '~'
-        && Char.equal tag.[1] '#' ->
+    | _ ->
         Tagged (String.sub tag 2 (String.length tag - 2), value_of_yojson context value)
-    | _ -> Array [ value_of_yojson context (`String tag); value_of_yojson context value ]
 
   and map_of_flat_array context values =
     let rec loop acc = function
@@ -435,13 +454,13 @@ module Json = struct
       String.length tag > 2
       && Char.equal tag.[0] '~'
       && Char.equal tag.[1] '#'
-    then read_cache_tag context tag
-    else tag
+    then Some (read_cache_tag context tag)
+    else None
 
   and decode_map_key context key =
     if String.length key > 1 && Char.equal key.[0] '^' then decode_cache_ref context key
     else
-      let value = decode_tagged_string context key in
+      let value = decode_tagged_string ~cache_token:false context key in
       read_cache_value context key value
 
   and verbose_tagged_value context tag value =

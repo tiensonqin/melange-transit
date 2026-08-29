@@ -81,6 +81,14 @@ module Make (Json : Json) = struct
     | Int actual when actual = expected -> ()
     | _ -> fail (Printf.sprintf "%s: expected int %d" name expected)
 
+  let max_cache_entries = 44 * 44
+
+  let cache_keyword index = Printf.sprintf "cache/%04d" index
+
+  let transit_keyword name = Printf.sprintf "\"~:%s\"" name
+
+  let json_array items = "[" ^ String.concat "," items ^ "]"
+
   let fixed_write_cases =
     [
       ("write-null", Null, "[\"~#'\",null]");
@@ -142,6 +150,54 @@ module Make (Json : Json) = struct
       ("read-symbol", "[\"~#'\",\"~$thing\"]", Symbol "thing");
       ("read-cache", "[\"~:color\",\"^0\",\"~$thing\",\"^1\"]",
        Array [ Keyword "color"; Keyword "color"; Symbol "thing"; Symbol "thing" ]);
+      ("read-cached-keyword-in-two-element-array",
+       "[[\"~:db/add\",1,\"~:block/title\",\"x\"],[\"^0\",2,\"~:block/name\",\"y\"],[\"^0\",3,\"~:block/uuid\",\"~u11111111-1111-4111-8111-111111111111\"],[\"~:db.fn/retractAttribute\",4,\"~:block/alias\"],[\"~:db/retractEntity\",5],[\"^6\",6]]",
+       Array
+         [
+           Array
+             [ Keyword "db/add"; Int 1; Keyword "block/title"; String "x" ];
+           Array
+             [ Keyword "db/add"; Int 2; Keyword "block/name"; String "y" ];
+           Array
+             [
+               Keyword "db/add";
+               Int 3;
+               Keyword "block/uuid";
+               Uuid "11111111-1111-4111-8111-111111111111";
+             ];
+           Array
+             [ Keyword "db.fn/retractAttribute"; Int 4; Keyword "block/alias" ];
+           Array [ Keyword "db/retractEntity"; Int 5 ];
+           Array [ Keyword "db/retractEntity"; Int 6 ];
+         ]);
+      ("read-cached-symbol-in-two-element-array",
+       "[[\"~$operation\"],[\"^0\",1]]",
+       Array
+         [ Array [ Symbol "operation" ]; Array [ Symbol "operation"; Int 1 ] ]);
+      ("read-cached-tag-in-two-element-array",
+       "[[\"~#point\",1],[\"^0\",2]]",
+       Array [ Tagged ("point", Int 1); Tagged ("point", Int 2) ]);
+      ("read-cached-string-in-two-element-array",
+       "[[\"^ \",\"name\",\"Ada\"],[\"^0\",1]]",
+       Array
+         [
+           Map [ (String "name", String "Ada") ];
+           Array [ String "name"; Int 1 ];
+         ]);
+      ("read-cached-tag-looking-string-in-two-element-array",
+       "[[\"^ \",\"~~#point\",0],[\"^0\",1]]",
+       Array
+         [
+           Map [ (String "~#point", Int 0) ];
+           Array [ String "~#point"; Int 1 ];
+         ]);
+      ("read-map-key-cached-once",
+       "[[\"^ \",\"~:first\",1,\"~:second\",2],[\"^1\",3,4]]",
+       Array
+         [
+           Map [ (Keyword "first", Int 1); (Keyword "second", Int 2) ];
+           Array [ Keyword "second"; Int 3; Int 4 ];
+         ]);
       ("read-map", "[\"^ \",\"name\",\"Grace\"]",
        Map [ (String "name", String "Grace") ]);
       ("read-date", "[\"~t1970-01-02T10:17:36.789Z\"]",
@@ -180,6 +236,40 @@ module Make (Json : Json) = struct
     List.iter
       (fun (name, text, expected) -> check_value name expected (of_string text))
       fixed_read_cases;
+    let boundary_names = List.init 45 cache_keyword in
+    let boundary_values = List.map (fun name -> Keyword name) boundary_names in
+    let boundary_json = List.map transit_keyword boundary_names in
+    check_string "write-cache-code-boundaries"
+      (json_array (boundary_json @ [ "\"^[\""; "\"^10\"" ]))
+      (to_string
+         (Array
+            (boundary_values
+            @ [ List.nth boundary_values 43; List.nth boundary_values 44 ])));
+    check_value "read-cache-code-boundaries"
+      (Array
+         (boundary_values
+         @ [ List.nth boundary_values 43; List.nth boundary_values 44 ]))
+      (of_string
+         (json_array (boundary_json @ [ "\"^[\""; "\"^10\"" ])));
+    let wrapping_names = List.init (max_cache_entries + 1) cache_keyword in
+    let wrapping_values = List.map (fun name -> Keyword name) wrapping_names in
+    let wrapping_json = List.map transit_keyword wrapping_names in
+    let wrapped_value = List.nth wrapping_values max_cache_entries in
+    check_string "write-cache-wraps-at-capacity"
+      (json_array (wrapping_json @ [ "\"^0\"" ]))
+      (to_string (Array (wrapping_values @ [ wrapped_value ])));
+    (match of_string (json_array (wrapping_json @ [ "\"^0\"" ])) with
+    | Array values ->
+        check_int "read-cache-wraps-at-capacity-length"
+          (max_cache_entries + 2)
+          (Int (List.length values));
+        check_value "read-cache-wraps-at-capacity-first" (List.hd wrapping_values)
+          (List.hd values);
+        check_value "read-cache-wraps-at-capacity-new-slot" wrapped_value
+          (List.nth values max_cache_entries);
+        check_value "read-cache-wraps-at-capacity-reference" wrapped_value
+          (List.nth values (max_cache_entries + 1))
+    | _ -> fail "read-cache-wraps-at-capacity: expected array");
     check_int "read-int-max" 2_147_483_647 (of_string "[\"~#'\",2147483647]");
     check_int "read-int-min" (-2_147_483_648)
       (of_string "[\"~#'\",-2147483648]");
