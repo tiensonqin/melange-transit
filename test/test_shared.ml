@@ -126,6 +126,13 @@ module Make (Json : Json) = struct
        "[\"~#point\",[10,20]]");
       ("write-complex-map", Map [ (Array [ Int 1; Int 2 ], String "point") ],
        "[\"~#cmap\",[[1,2],\"point\"]]");
+      ("write-complex-map-cache-order",
+       Map
+         [
+           ( Array [ Keyword "key/first"; Keyword "shared/token" ],
+             Array [ Keyword "value/first"; Keyword "shared/token" ] );
+         ],
+       "[\"~#cmap\",[[\"~:key/first\",\"~:shared/token\"],[\"~:value/first\",\"^2\"]]]");
     ]
 
   let fixed_verbose_cases =
@@ -169,6 +176,29 @@ module Make (Json : Json) = struct
              [ Keyword "db.fn/retractAttribute"; Int 4; Keyword "block/alias" ];
            Array [ Keyword "db/retractEntity"; Int 5 ];
            Array [ Keyword "db/retractEntity"; Int 6 ];
+         ]);
+      ("read-nested-cached-keywords-in-two-element-arrays",
+       "[[\"~:db/retractEntity\",[\"~:block/uuid\",\"~u22222222-2222-4222-8222-222222222222\"]],[\"^0\",[\"^1\",\"~u33333333-3333-4333-8333-333333333333\"]]]",
+       Array
+         [
+           Array
+             [
+               Keyword "db/retractEntity";
+               Array
+                 [
+                   Keyword "block/uuid";
+                   Uuid "22222222-2222-4222-8222-222222222222";
+                 ];
+             ];
+           Array
+             [
+               Keyword "db/retractEntity";
+               Array
+                 [
+                   Keyword "block/uuid";
+                   Uuid "33333333-3333-4333-8333-333333333333";
+                 ];
+             ];
          ]);
       ("read-cached-symbol-in-two-element-array",
        "[[\"~$operation\"],[\"^0\",1]]",

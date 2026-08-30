@@ -280,7 +280,9 @@ module Json = struct
             `List
               (List.concat_map
                  (fun (key, value) ->
-                   [ yojson_of_value context key; yojson_of_value context value ])
+                   let key = yojson_of_value context key in
+                   let value = yojson_of_value context value in
+                   [ key; value ])
                  entries);
           ]
     else
@@ -406,11 +408,9 @@ module Json = struct
         match array_tag context raw_tag with
         | Some tag -> tagged_array_value context tag value
         | None ->
-            Array
-              [
-                value_of_yojson context (`String raw_tag);
-                value_of_yojson context value;
-              ])
+            let first = value_of_yojson context (`String raw_tag) in
+            let second = value_of_yojson context value in
+            Array [ first; second ])
     | values -> Array (List.map (value_of_yojson context) values)
 
   and tagged_array_value context tag value =
